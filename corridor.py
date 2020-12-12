@@ -14,6 +14,7 @@ import random
 import itertools as it
 import skimage.transform
 
+from vizdoom import Mode
 from time import sleep, time
 from collections import deque
 from tqdm import trange
@@ -21,15 +22,15 @@ from tqdm import trange
 # Q-learning settings
 learning_rate = 0.00025
 discount_factor = 0.99
-train_epochs = 5
-learning_steps_per_epoch = 2000
+train_epochs = 20
+learning_steps_per_epoch = 5000
 replay_memory_size = 10000
 
 # NN learning settings
 batch_size = 64
 
 # Training regime
-test_episodes_per_epoch = 100
+test_episodes_per_epoch = 25
 
 # Other parameters
 frame_repeat = 12
@@ -42,8 +43,8 @@ load_model = False
 skip_learning = False
 
 # Configuration file path
-# config_file_path = "../../scenarios/simpler_basic.cfg"
 config_file_path = "./scenarios/deadly_corridor.cfg"
+# config_file_path = "../../scenarios/rocket_basic.cfg"
 # config_file_path = "../../scenarios/basic.cfg"
 
 # Uses GPU if available
@@ -67,7 +68,7 @@ def create_simple_game():
     game = vzd.DoomGame()
     game.load_config(config_file_path)
     game.set_window_visible(False)
-    game.set_mode(vzd.Mode.PLAYER)
+    game.set_mode(Mode.PLAYER)
     game.set_screen_format(vzd.ScreenFormat.GRAY8)
     game.set_screen_resolution(vzd.ScreenResolution.RES_640X480)
     game.init()
@@ -82,8 +83,12 @@ def test(game, agent):
     test_scores = []
     for test_episode in trange(test_episodes_per_epoch, leave=False):
         game.new_episode()
+        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
-            state = preprocess(game.get_state().screen_buffer)
+            frame = preprocess(game.get_state().screen_buffer)
+            stacked_frames.append(frame)
+            state = np.stack(stacked_frames, axis=1).squeeze()
+
             best_action_index = agent.get_action(state)
 
             game.make_action(actions[best_action_index], frame_repeat)
@@ -108,18 +113,23 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
         game.new_episode()
         train_scores = []
         global_step = 0
+        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
         print("\nEpoch #" + str(epoch + 1))
 
         for _ in trange(steps_per_epoch, leave=False):
-            state = preprocess(game.get_state().screen_buffer)
+            frame = preprocess(game.get_state().screen_buffer)
+            stacked_frames.append(frame)
+            state = np.stack(stacked_frames, axis=1).squeeze()
             action = agent.get_action(state)
             reward = game.make_action(actions[action], frame_repeat)
             done = game.is_episode_finished()
 
             if not done:
-                next_state = preprocess(game.get_state().screen_buffer)
+                next_frame = preprocess(game.get_state().screen_buffer)
+                stacked_frames.append(next_frame)
+                next_state = np.stack(stacked_frames, axis=1).squeeze()
             else:
-                next_state = np.zeros((1, 30, 45)).astype(np.float32)
+                next_state = -np.ones((4, 30, 45)).astype(np.float32)
 
             agent.append_memory(state, action, reward, next_state, done)
 
@@ -157,7 +167,7 @@ class DuelQNet(nn.Module):
     def __init__(self, available_actions_count):
         super(DuelQNet, self).__init__()
         self.conv1 = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=3, stride=2, bias=False),
+            nn.Conv2d(4, 8, kernel_size=3, stride=2, bias=False),
             nn.BatchNorm2d(8),
             nn.ReLU()
         )
@@ -206,6 +216,7 @@ class DuelQNet(nn.Module):
 
         return x
 
+
 class DQNAgent:
     def __init__(self, action_size, memory_size, batch_size, discount_factor, 
                  lr, load_model, epsilon=1, epsilon_decay=0.9996, epsilon_min=0.1):
@@ -250,7 +261,6 @@ class DQNAgent:
     def train(self):
         batch = random.sample(self.memory, self.batch_size)
         batch = np.array(batch, dtype=object)
-
         states = np.stack(batch[:, 0]).astype(float)
         actions = batch[:, 1].astype(int)
         rewards = batch[:, 2].astype(float)
@@ -293,7 +303,7 @@ if __name__ == '__main__':
     # Initialize game and actions
     game = create_simple_game()
     n = game.get_available_buttons_size()
-    actions = [list(a) for a in it.product([0, 1], repeat=n)]
+    actions = np.identity(n, dtype=int).tolist()
 
     # Initialize our agent with the set parameters
     agent = DQNAgent(len(actions), lr=learning_rate, batch_size=batch_size,
@@ -311,13 +321,16 @@ if __name__ == '__main__':
     # Reinitialize the game with window visible
     game.close()
     game.set_window_visible(True)
-    game.set_mode(vzd.Mode.ASYNC_PLAYER)
+    game.set_mode(Mode.ASYNC_PLAYER)
     game.init()
 
     for _ in range(episodes_to_watch):
         game.new_episode()
+        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
-            state = preprocess(game.get_state().screen_buffer)
+            frame = preprocess(game.get_state().screen_buffer)
+            stacked_frames.append(frame)
+            state = np.stack(stacked_frames, axis=1).squeeze()
             best_action_index = agent.get_action(state)
 
             # Instead of make_action(a, frame_repeat) in order to make the animation smooth
