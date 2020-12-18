@@ -83,7 +83,7 @@ def test(game, agent):
     test_scores = []
     for test_episode in trange(test_episodes_per_epoch, leave=False):
         game.new_episode()
-        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
+        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
             frame = preprocess(game.get_state().screen_buffer)
             stacked_frames.append(frame)
@@ -113,7 +113,7 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
         game.new_episode()
         train_scores = []
         global_step = 0
-        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
+        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         print("\nEpoch #" + str(epoch + 1))
 
         for _ in trange(steps_per_epoch, leave=False):
@@ -129,7 +129,7 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
                 stacked_frames.append(next_frame)
                 next_state = np.stack(stacked_frames, axis=1).squeeze()
             else:
-                next_state = -np.ones((4, 30, 45)).astype(np.float32)
+                next_state = -np.ones((4, *resolution)).astype(np.float32)
 
             agent.append_memory(state, action, reward, next_state, done)
 
@@ -139,6 +139,7 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
             if done:
                 train_scores.append(game.get_total_reward())
                 game.new_episode()
+                stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
 
             global_step += 1
 
@@ -326,7 +327,7 @@ if __name__ == '__main__':
 
     for _ in range(episodes_to_watch):
         game.new_episode()
-        stacked_frames = deque([np.zeros((1, *resolution))for i in range(4)], maxlen=4)
+        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
             frame = preprocess(game.get_state().screen_buffer)
             stacked_frames.append(frame)
