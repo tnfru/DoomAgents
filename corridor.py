@@ -7,14 +7,13 @@
 from __future__ import print_function
 import vizdoom as vzd
 import torch
-import torch.nn as nn
-import torch.optim as optim
 import numpy as np
 import random
 import itertools as it
 import skimage.transform
 
 from vizdoom import Mode
+from DQNAgent import DQNAgent
 from time import sleep, time
 from collections import deque
 from tqdm import trange
@@ -83,12 +82,8 @@ def test(game, agent):
     test_scores = []
     for test_episode in trange(test_episodes_per_epoch, leave=False):
         game.new_episode()
-        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
-            frame = preprocess(game.get_state().screen_buffer)
-            stacked_frames.append(frame)
-            state = np.stack(stacked_frames, axis=1).squeeze()
-
+            state = preprocess(game.get_state().screen_buffer)
             best_action_index = agent.get_action(state)
 
             game.make_action(actions[best_action_index], frame_repeat)
@@ -113,23 +108,18 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
         game.new_episode()
         train_scores = []
         global_step = 0
-        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         print("\nEpoch #" + str(epoch + 1))
 
         for _ in trange(steps_per_epoch, leave=False):
-            frame = preprocess(game.get_state().screen_buffer)
-            stacked_frames.append(frame)
-            state = np.stack(stacked_frames, axis=1).squeeze()
+            state = preprocess(game.get_state().screen_buffer)
             action = agent.get_action(state)
             reward = game.make_action(actions[action], frame_repeat)
             done = game.is_episode_finished()
 
             if not done:
-                next_frame = preprocess(game.get_state().screen_buffer)
-                stacked_frames.append(next_frame)
-                next_state = np.stack(stacked_frames, axis=1).squeeze()
+                next_state = preprocess(game.get_state().screen_buffer)
             else:
-                next_state = -np.ones((4, *resolution)).astype(np.float32)
+                next_state = -np.ones((1, *resolution)).astype(np.float32)
 
             agent.append_memory(state, action, reward, next_state, done)
 
@@ -139,7 +129,6 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
             if done:
                 train_scores.append(game.get_total_reward())
                 game.new_episode()
-                stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
 
             global_step += 1
 
@@ -159,147 +148,6 @@ def run(game, agent, actions, num_epochs, frame_repeat, steps_per_epoch=2000):
     return agent, game
 
 
-class DuelQNet(nn.Module):
-    """
-    This is Duel DQN architecture.
-    see https://arxiv.org/abs/1511.06581 for more information.
-    """
-
-    def __init__(self, available_actions_count):
-        super(DuelQNet, self).__init__()
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(4, 8, kernel_size=3, stride=2, bias=False),
-            nn.BatchNorm2d(8),
-            nn.ReLU()
-        )
-
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(8, 8, kernel_size=3, stride=2, bias=False),
-            nn.BatchNorm2d(8),
-            nn.ReLU()
-        )
-
-        self.conv3 = nn.Sequential(
-            nn.Conv2d(8, 8, kernel_size=3, stride=1, bias=False),
-            nn.BatchNorm2d(8),
-            nn.ReLU()
-        )
-
-        self.conv4 = nn.Sequential(
-            nn.Conv2d(8, 16, kernel_size=3, stride=1, bias=False),
-            nn.BatchNorm2d(16),
-            nn.ReLU()
-        )
-
-        self.state_fc = nn.Sequential(
-            nn.Linear(96, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        )
-
-        self.advantage_fc = nn.Sequential(
-            nn.Linear(96, 64),
-            nn.ReLU(),
-            nn.Linear(64, available_actions_count)
-        )
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = x.view(-1, 192)
-        x1 = x[:, :96]  # input for the net to calculate the state value
-        x2 = x[:, 96:]  # relative advantage of actions in the state
-        state_value = self.state_fc(x1).reshape(-1, 1)
-        advantage_values = self.advantage_fc(x2)
-        x = state_value + (advantage_values - advantage_values.mean(dim=1).reshape(-1, 1))
-
-        return x
-
-
-class DQNAgent:
-    def __init__(self, action_size, memory_size, batch_size, discount_factor, 
-                 lr, load_model, epsilon=1, epsilon_decay=0.9996, epsilon_min=0.1):
-        self.action_size = action_size
-        self.epsilon = epsilon
-        self.epsilon_decay = epsilon_decay
-        self.epsilon_min = epsilon_min
-        self.batch_size = batch_size
-        self.discount = discount_factor
-        self.lr = lr
-        self.memory = deque(maxlen=memory_size)
-        self.criterion = nn.MSELoss()
-
-        if load_model:
-            print("Loading model from: ", model_savefile)
-            self.q_net = torch.load(model_savefile)
-            self.target_net = torch.load(model_savefile)
-            self.epsilon = self.epsilon_min
-
-        else:
-            print("Initializing new model")
-            self.q_net = DuelQNet(action_size).to(DEVICE)
-            self.target_net = DuelQNet(action_size).to(DEVICE)
-
-        self.opt = optim.RMSprop(self.q_net.parameters(), lr=self.lr)
-
-    def get_action(self, state):
-        if np.random.uniform() < self.epsilon:
-            return random.choice(range(self.action_size))
-        else:
-            state = np.expand_dims(state, axis=0)
-            state = torch.from_numpy(state).float().to(DEVICE)
-            action = torch.argmax(self.q_net(state)).item()
-            return action
-
-    def update_target_net(self):
-        self.target_net.load_state_dict(self.q_net.state_dict())
-
-    def append_memory(self, state, action, reward, next_state, done):
-        self.memory.append((state, action, reward, next_state, done))
-
-    def train(self):
-        batch = random.sample(self.memory, self.batch_size)
-        batch = np.array(batch, dtype=object)
-        states = np.stack(batch[:, 0]).astype(float)
-        actions = batch[:, 1].astype(int)
-        rewards = batch[:, 2].astype(float)
-        next_states = np.stack(batch[:, 3]).astype(float)
-        dones = batch[:, 4].astype(bool)
-        not_dones = ~dones
-
-        row_idx = np.arange(self.batch_size)  # used for indexing the batch
-
-        # value of the next states with double q learning
-        # see https://arxiv.org/abs/1509.06461 for more information on double q learning
-        with torch.no_grad():
-            next_states = torch.from_numpy(next_states).float().to(DEVICE)
-            idx = row_idx, np.argmax(self.q_net(next_states).cpu().data.numpy(), 1)
-            next_state_values = self.target_net(next_states).cpu().data.numpy()[idx]
-            next_state_values = next_state_values[not_dones]
-
-        # this defines y = r + discount * max_a q(s', a)
-        q_targets = rewards.copy()
-        q_targets[not_dones] += self.discount * next_state_values
-        q_targets = torch.from_numpy(q_targets).float().to(DEVICE)
-
-        # this selects only the q values of the actions taken
-        idx = row_idx, actions
-        states = torch.from_numpy(states).float().to(DEVICE)
-        action_values = self.q_net(states)[idx].float().to(DEVICE)
-
-        self.opt.zero_grad()
-        td_error = self.criterion(q_targets, action_values)
-        td_error.backward()
-        self.opt.step()
-
-        if self.epsilon > self.epsilon_min:
-            self.epsilon *= self.epsilon_decay
-        else:
-            self.epsilon = self.epsilon_min
-
-
 if __name__ == '__main__':
     # Initialize game and actions
     game = create_simple_game()
@@ -309,7 +157,7 @@ if __name__ == '__main__':
     # Initialize our agent with the set parameters
     agent = DQNAgent(len(actions), lr=learning_rate, batch_size=batch_size,
                      memory_size=replay_memory_size, discount_factor=discount_factor,
-                     load_model=load_model)
+                     load_model=load_model, device=DEVICE)
 
     # Run the training for the set number of epochs
     if not skip_learning:
@@ -327,14 +175,10 @@ if __name__ == '__main__':
 
     for _ in range(episodes_to_watch):
         game.new_episode()
-        stacked_frames = deque([np.zeros((1, *resolution)) for i in range(4)], maxlen=4)
         while not game.is_episode_finished():
-            frame = preprocess(game.get_state().screen_buffer)
-            stacked_frames.append(frame)
-            state = np.stack(stacked_frames, axis=1).squeeze()
+            state = preprocess(game.get_state().screen_buffer)
             best_action_index = agent.get_action(state)
 
-            # Instead of make_action(a, frame_repeat) in order to make the animation smooth
             game.set_action(actions[best_action_index])
             for _ in range(frame_repeat):
                 game.advance_action()
