@@ -100,7 +100,7 @@ class DQNAgent:
 
     def choose_action(self, state):
         if self.epsilon < np.random.uniform(0,1):
-            action = int(backend.argmax(self.model(state.reshape(1,30,45,1)), axis=1))
+            action = int(backend.argmax(self.model(state.reshape(1,30,45,1))))
         else:
             action = np.random.choice(range(8), 1)[0]
 
