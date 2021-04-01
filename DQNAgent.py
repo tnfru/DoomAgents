@@ -70,8 +70,8 @@ class DuelQNet(nn.Module):
 
 
 class DQNAgent:
-    def __init__(self, action_size, memory_size, batch_size, discount_factor, 
-                 lr, load_model, device, epsilon=1, epsilon_decay=0.9996, 
+    def __init__(self, action_size, memory_size, batch_size, discount_factor,
+                 lr, load_model, device, epsilon=1, epsilon_decay=0.9996,
                  epsilon_min=0.1):
         self.action_size = action_size
         self.epsilon = epsilon
